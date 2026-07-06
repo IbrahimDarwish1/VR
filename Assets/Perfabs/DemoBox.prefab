@@ -1,0 +1,87 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &2617507883777459023
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 6759134696988525326}
+  - component: {fileID: 3883709034767422530}
+  - component: {fileID: 7177241561001561314}
+  m_Layer: 0
+  m_Name: DemoBox
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &6759134696988525326
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2617507883777459023}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: -3.83, y: -1.12, z: 3.4641}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &3883709034767422530
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2617507883777459023}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 5dbc6899666390d43a82f17c41f8ca90, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::FluidDemoBox
+  boxSize: {x: 1, y: 1.2, z: 1}
+  fillRatio: 0.5
+  particleCount: 1000000
+  smoothingRadius: 0.12
+  restDensity: 1
+  pressureStiffness: 150
+  viscosity: 0.5
+  particleMass: 0.02
+  gravity: 9.81
+  wallFriction: 0.2
+  allowManualMove: 1
+  moveSensitivity: 0.012
+  autoShakeDemo: 1
+  shakeAmplitude: 0.7
+  shakeSpeed: 0.9
+  customParticleMaterial: {fileID: 2100000, guid: 802b631cc911628408d35489b251e95c, type: 2}
+  liquidColor: {r: 0.2, g: 0.4, b: 0.9, a: 0.85}
+  particleRadius: 0.028
+  wireColor: {r: 1, g: 1, b: 1, a: 0.55}
+--- !u!65 &7177241561001561314
+BoxCollider:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2617507883777459023}
+  m_Material: {fileID: 0}
+  m_IncludeLayers:
+    serializedVersion: 2
+    m_Bits: 0
+  m_ExcludeLayers:
+    serializedVersion: 2
+    m_Bits: 0
+  m_LayerOverridePriority: 0
+  m_IsTrigger: 0
+  m_ProvidesContacts: 0
+  m_Enabled: 1
+  serializedVersion: 3
+  m_Size: {x: 1, y: 1, z: 1}
+  m_Center: {x: 0, y: 0, z: 0}
