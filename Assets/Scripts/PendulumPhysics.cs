@@ -22,14 +22,30 @@ public class PendulumPhysics : MonoBehaviour
 
     [Header("Base Environment Constants")]
     public float g = 9.81f;
-    public float dt = 0.01f;
+    [HideInInspector]
+    public float dt;
     public float airDragCoeff = 0.05f;
+
+    [Header("Tuning Factors")]
+    [Tooltip("Scales how much viscosity affects flow speed")]
+    public float viscosityFlowScale = 10f;
+    [Tooltip("Scales how much viscosity affects movement drag")]
+    public float viscosityDragScale = 0.1f;
 
     [Header("Bucket & Paint Settings")]
     public float emptyBucketMass = 0.5f;
     public float initialPaintMass = 2.5f;
     public float paintDensity = 1200f;
     public float bucketRadius = 0.15f;
+
+    [Header("Fluid Interaction")]
+    public Vector3 externalFluidForce;
+
+    [Header("Bucket Rotation")]
+    public float angularDrag = 0.5f;
+    public float rotationalStrength = 1.0f;
+    private Vector3 angularVelocity = Vector3.zero;
+    private Vector3 fluidTorque = Vector3.zero;
 
     [Header("Canvas Collision (التصادم مع اللوحة)")]
     [Tooltip("ارتفاع سطح اللوحة على المحور Y - يجب أن يطابق قيمة canvasY في PaintStream")]
@@ -55,7 +71,7 @@ public class PendulumPhysics : MonoBehaviour
             Debug.LogError(
                 $"[PendulumPhysics] على الكائن '{gameObject.name}': " +
                 $"upcenter = {(upcenter == null ? "غير معيّن (NULL)" : "موجود")}, " +
-                $"ball = {(ball == null ? "غير معيّن (NULL)" : "موجود")}. " 
+                $"ball = {(ball == null ? "غير معيّن (NULL)" : "موجود")}. "
             );
             return;
         }
@@ -67,7 +83,7 @@ public class PendulumPhysics : MonoBehaviour
             {
                 Debug.LogWarning(
                     $"[PendulumPhysics] على الكائن '{gameObject.name}': " +
-                    "المسافة بين upcenter و ball قريبة من الصفر في المشهد. " 
+                    "المسافة بين upcenter و ball قريبة من الصفر في المشهد. "
                 );
             }
         }
@@ -79,7 +95,6 @@ public class PendulumPhysics : MonoBehaviour
     {
         if (upcenter == null || ball == null) return;
 
-        // إعادة تعيين حالة الالتصاق باللوحة عند بدء تجربة جديدة
         IsStuckOnCanvas = false;
 
         currentPaintMass = initialPaintMass;
@@ -107,6 +122,11 @@ public class PendulumPhysics : MonoBehaviour
     {
         if (upcenter == null || ball == null) return;
 
+        dt = Time.fixedDeltaTime;
+
+        externalFluidForce = Vector3.zero;
+        fluidTorque = Vector3.zero;
+
         // إذا كان الدلو قد التصق باللوحة سابقاً، نوقف كل حساب فيزيائي إضافي للحركة
         // (يبقى الموضع ثابتاً تماماً - سلوك Inelastic Collision كما في الدراسة المرجعية)
         if (IsStuckOnCanvas)
@@ -129,7 +149,7 @@ public class PendulumPhysics : MonoBehaviour
             float paintVolume = currentPaintMass / paintDensity;
             float fluidHeight = paintVolume / bucketArea;
 
-            float exitVelocity = Mathf.Sqrt(2f * g * fluidHeight) * (1.0f - fluidViscosity * 10f);
+            float exitVelocity = Mathf.Sqrt(2f * g * fluidHeight) * (1.0f - fluidViscosity * viscosityFlowScale);
             exitVelocity = Mathf.Max(exitVelocity, 0f);
 
             float volumeDischarged = holeArea * exitVelocity * dt;
@@ -140,14 +160,44 @@ public class PendulumPhysics : MonoBehaviour
 
         currentTotalMass = emptyBucketMass + currentPaintMass;
 
-        // حساب السرعة الحركية اللحظية من مواقع فيرليه
-        CurrentVelocity = (currentPos - previousPos) / dt;
-
         // مصفوفة القوى (الجاذبية ومقاومة الوسط)
-        Vector3 gravityForce = new Vector3(0, -currentTotalMass * g, 0);
-        Vector3 dragForce = -(airDragCoeff + (fluidViscosity * 0.1f)) * CurrentVelocity;
-        Vector3 totalExternalForce = gravityForce + dragForce;
+        Vector3 toPivot = currentPos - upcenter.position;
+        Vector3 direction = toPivot.normalized;
+        // gravity direction
+        Vector3 gravity = new Vector3(0, -1f, 0);
+        // remove radial component → keep tangential only
+        Vector3 gravityTangential = gravity - Vector3.Dot(gravity, direction) * direction;
+        // force = mass * g
+        Vector3 gravityForce = gravityTangential * currentTotalMass * g;
 
+        // velocity split
+        Vector3 radialVelocity = Vector3.Dot(CurrentVelocity, direction) * direction;
+        Vector3 tangentialVelocity = CurrentVelocity - radialVelocity;
+
+        // drag only on tangential motion
+        Vector3 dragForce =
+            -airDragCoeff * tangentialVelocity
+            - fluidViscosity * viscosityDragScale * tangentialVelocity;
+
+        Vector3 totalExternalForce =
+            gravityForce +
+            dragForce +
+            externalFluidForce;
+
+        // Angular physics
+        Vector3 angularAcceleration = fluidTorque / currentTotalMass;
+
+        angularVelocity += angularAcceleration * dt;
+
+        angularVelocity *= Mathf.Clamp01(1f - angularDrag * dt);
+
+        if (angularVelocity.magnitude > 0.001f)
+        {
+            ball.Rotate(
+                angularVelocity * Mathf.Rad2Deg * dt,
+                Space.World
+            );
+        }
         Vector3 acceleration = totalExternalForce / currentTotalMass;
 
         // تكامل فيرليه الأساسي للحساب التنبؤي
@@ -171,6 +221,7 @@ public class PendulumPhysics : MonoBehaviour
             return;
         }
 
+        CurrentVelocity = (currentPos - previousPos) / dt;
         // نقل الإحداثيات إلى عنصر العرض الرسومي
         ball.position = currentPos;
     }
@@ -187,5 +238,15 @@ public class PendulumPhysics : MonoBehaviour
         useSceneRopeLength = false;
 
         InitializePendulumValues();
+    }
+
+    public void AddFluidForce(Vector3 force)
+    {
+        externalFluidForce += force;
+    }
+
+    public void AddFluidTorque(Vector3 torque)
+    {
+        fluidTorque += torque;
     }
 }

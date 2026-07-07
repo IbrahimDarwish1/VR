@@ -7,54 +7,57 @@ using System.Collections.Generic;
 public class FluidSPH3D : MonoBehaviour
 {
     [Header("المراجع")]
-    public Transform    bucket;
-    public PendulumPhysics pendulum; // المتغير معرّف هنا باسم pendulum
-    public PaintCanvas  paintCanvas;
+    public Transform bucket;
+    public Transform holePoint;
+    public PendulumPhysics pendulum;
+    public PaintCanvas paintCanvas;
 
     [Header("إعدادات SPH")]
-    public int   totalParticleCount = 120;
-    public float smoothingRadius    = 0.09f;
-    public float restDensity        = 600f;
-    public float pressureStiffness  = 30f;
-    public float viscosity          = 6f;
-    public float particleMass       = 0.02f;
+    public int totalParticleCount = 120;
+    public float smoothingRadius = 0.09f;
+    public float restDensity = 600f;
+    public float pressureStiffness = 30f;
+    public float viscosity = 6f;
+    public float particleMass = 0.02f;
 
     [Header("هندسة الدلو")]
     public float bucketRadius = 0.16f;
     public float bucketHeight = 0.35f;
-    public float holeRadius   = 0.06f;
+    public float holeRadius = 0.06f;
     [Range(0f, 0.4f)]
     public float wallFriction = 0.2f;
 
     [Header("الأداء والاستقرار")]
     [Range(1, 6)]
-    public int   sphSubSteps = 3;
-    public float maxForce    = 40f;
+    public int sphSubSteps = 3;
+    public float maxForce = 40f;
 
     [Header("العرض البصري")]
-    public bool  showParticles        = true;
-    public Color liquidColor          = new Color(0.85f, 0.1f, 0.1f, 0.9f);
+    public bool showParticles = true;
+    public Color liquidColor = new Color(0.85f, 0.1f, 0.1f, 0.9f);
     public float particleVisualRadius = 0.013f;
 
     public class FluidParticle
     {
         public Vector3 position;
         public Vector3 velocity;
-        public float   density;
-        public float   pressure;
-        public bool    isFree;   
-        public float   age;
+        public float density;
+        public float pressure;
+        public bool isFree;
+        public float age;
     }
 
     private List<FluidParticle> particles = new List<FluidParticle>();
     private float h, h2, poly6C, spikyC, viscC;
-    private Mesh     particleMesh;
+    private Mesh particleMesh;
     private Material particleMat;
-    private Vector3  lastBucketPos;
-    private Vector3  bucketVelocity;
+    private Vector3 lastBucketPos;
+    private Vector3 bucketVelocity;
+    private Vector3 bucketAcceleration;
+    private Vector3 lastBucketVelocity;
     private int impactCount = 0;
 
-void Start()
+    void Start()
     {
         //  التعديل المتوافق مع جميع نسخ يونيتي لمنع خطأ الـ Vector3
         if (paintCanvas == null)
@@ -70,13 +73,13 @@ void Start()
 
     void PrecomputeKernels()
     {
-        h     = smoothingRadius;
-        h2    = h * h;
+        h = smoothingRadius;
+        h2 = h * h;
         float h6 = Mathf.Pow(h, 6f);
         float h9 = Mathf.Pow(h, 9f);
         poly6C = 315f / (64f * Mathf.PI * h9);
         spikyC = -45f / (Mathf.PI * h6);
-        viscC  =  45f / (Mathf.PI * h6);
+        viscC = 45f / (Mathf.PI * h6);
     }
 
     void SpawnParticlesGrid()
@@ -86,24 +89,24 @@ void Start()
         int spawned = 0;
 
         for (int ix = -10; ix <= 10 && spawned < totalParticleCount; ix++)
-        for (int iy = -10; iy <= 10 && spawned < totalParticleCount; iy++)
-        for (int iz = -10; iz <= 10 && spawned < totalParticleCount; iz++)
-        {
-            Vector3 lp = new Vector3(ix * spacing, iy * spacing * 0.65f, iz * spacing);
-            if (new Vector2(lp.x, lp.z).magnitude > bucketRadius * 0.8f) continue;
-            if (lp.y > bucketHeight * 0.38f || lp.y < -bucketHeight * 0.38f) continue;
+            for (int iy = -10; iy <= 10 && spawned < totalParticleCount; iy++)
+                for (int iz = -10; iz <= 10 && spawned < totalParticleCount; iz++)
+                {
+                    Vector3 lp = new Vector3(ix * spacing, iy * spacing * 0.65f, iz * spacing);
+                    if (new Vector2(lp.x, lp.z).magnitude > bucketRadius * 0.8f) continue;
+                    if (lp.y > bucketHeight * 0.38f || lp.y < -bucketHeight * 0.38f) continue;
 
-            particles.Add(new FluidParticle
-            {
-                position = bucket.TransformPoint(lp),
-                velocity = Vector3.zero,
-                density  = restDensity,
-                pressure = 0f,
-                isFree   = false,
-                age      = 0f
-            });
-            spawned++;
-        }
+                    particles.Add(new FluidParticle
+                    {
+                        position = bucket.TransformPoint(lp),
+                        velocity = Vector3.zero,
+                        density = restDensity,
+                        pressure = 0f,
+                        isFree = false,
+                        age = 0f
+                    });
+                    spawned++;
+                }
     }
 
     void SetupVisuals()
@@ -123,14 +126,27 @@ void Start()
         if (bucket == null) return;
 
         float fullDt = Time.fixedDeltaTime;
-        bucketVelocity = (bucket.position - lastBucketPos) / fullDt;
-        lastBucketPos  = bucket.position;
+        Vector3 newBucketVelocity = (bucket.position - lastBucketPos) / fullDt;
+        bucketAcceleration = (newBucketVelocity - bucketVelocity) / fullDt;
+
+        lastBucketVelocity = bucketVelocity;
+        bucketVelocity = newBucketVelocity;
+        lastBucketPos = bucket.position;
 
         float sphDt = fullDt / sphSubSteps;
         for (int step = 0; step < sphSubSteps; step++)
         {
             ComputeDensityPressure();
             ApplySPHForces(sphDt);
+        }
+
+        if (pendulum != null)
+        {
+            Vector3 fluidForce = ComputeBucketFluidForce();
+            Vector3 fluidTorque = ComputeBucketFluidTorque();
+
+            pendulum.AddFluidForce(fluidForce);
+            pendulum.AddFluidTorque(fluidTorque);
         }
 
         UpdateFreeParticles(fullDt);
@@ -155,7 +171,7 @@ void Start()
                     rho += particleMass * poly6C * diff * diff * diff;
                 }
             }
-            particles[i].density  = Mathf.Max(rho, 0.5f);
+            particles[i].density = Mathf.Max(rho, 0.5f);
             particles[i].pressure = pressureStiffness * (particles[i].density - restDensity);
         }
     }
@@ -184,9 +200,8 @@ void Start()
 
                 fV += viscosity * particleMass * ((particles[j].velocity - p.velocity) / Mathf.Max(particles[j].density, 0.5f)) * (viscC * (h - d));
             }
-
-            Vector3 inertia = -bucketVelocity * particleMass * 1.2f;
-            Vector3 total   = fP + fV + grav * particleMass + inertia;
+            Vector3 inertia = -bucketAcceleration * particleMass * (pressureStiffness / 200f);
+            Vector3 total = fP + fV + grav * particleMass + inertia;
 
             if (total.magnitude > maxForce)
                 total = total.normalized * maxForce;
@@ -242,7 +257,7 @@ void Start()
         bool hasPaint = (pendulum == null) || (pendulum.CurrentPaintMass > 0.01f);
         if (!hasPaint) return;
 
-        float bucketSpeed   = bucketVelocity.magnitude;
+        float bucketSpeed = bucketVelocity.magnitude;
         float releaseChance = Mathf.Clamp01(0.02f + bucketSpeed * 0.03f);
 
         for (int i = 0; i < particles.Count; i++)
@@ -251,18 +266,31 @@ void Start()
             if (p.isFree) continue;
 
             Vector3 local = bucket.InverseTransformPoint(p.position);
-            float   distH = new Vector2(local.x, local.z).magnitude;
+            float distH = new Vector2(local.x, local.z).magnitude;
 
             bool nearHole = local.y <= -bucketHeight * 0.40f && distH <= holeRadius;
             if (!nearHole) continue;
 
             if (Random.value < releaseChance)
             {
-                p.isFree   = true;
-                p.age      = 0f;
+                p.isFree = true;
+                p.age = 0f;
+                if (holePoint != null)
+                {
+                    p.position = holePoint.position;
+                }
                 float fluidH = Mathf.Max(bucketHeight * 0.5f, 0.05f);
-                float exitV  = Mathf.Sqrt(2f * 9.81f * fluidH) * 0.4f;
-                p.velocity   = bucket.TransformDirection(Vector3.down) * exitV + bucketVelocity * 0.8f;
+                float exitV = Mathf.Sqrt(2f * 9.81f * fluidH) * 0.4f;
+                Vector3 exitDirection = Vector3.down;
+
+                if (holePoint != null)
+                {
+                    exitDirection = holePoint.forward;
+                }
+
+                p.velocity = exitDirection * exitV
+                             + bucketVelocity * 0.8f;
+
                 particles[i] = p;
             }
         }
@@ -270,11 +298,11 @@ void Start()
 
     Vector3 ConstrainToBucket(Vector3 wp, ref Vector3 vel)
     {
-        Vector3 lp  = bucket.InverseTransformPoint(wp);
-        Vector3 lv  = bucket.InverseTransformDirection(vel);
-        float   hy  = bucketHeight * 0.5f;
+        Vector3 lp = bucket.InverseTransformPoint(wp);
+        Vector3 lv = bucket.InverseTransformDirection(vel);
+        float hy = bucketHeight * 0.5f;
 
-        if (lp.y >  hy) { lp.y =  hy; lv.y = Mathf.Min(lv.y, 0) * wallFriction; }
+        if (lp.y > hy) { lp.y = hy; lv.y = Mathf.Min(lv.y, 0) * wallFriction; }
         if (lp.y < -hy) { lp.y = -hy; lv.y = Mathf.Max(lv.y, 0) * wallFriction; }
 
         Vector2 flat = new Vector2(lp.x, lp.z);
@@ -298,9 +326,9 @@ void Start()
         float y = Random.Range(-bucketHeight * 0.25f, bucketHeight * 0.2f);
         p.position = bucket.TransformPoint(new Vector3(r * Mathf.Cos(t), y, r * Mathf.Sin(t)));
         p.velocity = Vector3.zero;
-        p.isFree   = false;
-        p.age      = 0f;
-        p.density  = restDensity;
+        p.isFree = false;
+        p.age = 0f;
+        p.density = restDensity;
         p.pressure = 0f;
     }
 
@@ -328,5 +356,73 @@ void Start()
         }
         if (mats.Count > 0)
             Graphics.DrawMeshInstanced(particleMesh, 0, particleMat, mats);
+    }
+    Vector3 ComputeBucketFluidForce()
+    {
+        Vector3 force = Vector3.zero;
+        float influenceRadius = smoothingRadius * 1.2f;
+
+        for (int i = 0; i < particles.Count; i++)
+        {
+            var p = particles[i];
+            if (p.isFree) continue;
+
+            Vector3 toBucket = bucket.position - p.position;
+            float d = toBucket.magnitude;
+
+            if (d < influenceRadius && d > 0.0001f)
+            {
+                float densityFactor = p.density / restDensity;
+                float pressureFactor = Mathf.Max(0, p.pressure);
+
+                // smooth falloff (important for stability)
+                float falloff = 1f - (d / influenceRadius);
+                falloff = falloff * falloff;
+
+                Vector3 dir = toBucket / d;
+
+                force += dir * pressureFactor * densityFactor * falloff * particleMass;
+            }
+        }
+
+        return force;
+    }
+
+    Vector3 ComputeBucketFluidTorque()
+    {
+        Vector3 torque = Vector3.zero;
+
+        if (bucket == null)
+            return torque;
+
+
+        Vector3 center = bucket.position;
+
+        for (int i = 0; i < particles.Count; i++)
+        {
+            FluidParticle p = particles[i];
+
+            if (p.isFree)
+                continue;
+
+
+            Vector3 forceDir = (center - p.position).normalized;
+
+            float pressureForce =
+                Mathf.Max(0, p.pressure) * particleMass;
+
+
+            Vector3 force = forceDir * pressureForce;
+
+
+            // lever arm
+            Vector3 r = p.position - center;
+
+
+            torque += Vector3.Cross(r, force);
+        }
+
+
+        return torque;
     }
 }
