@@ -249,4 +249,8 @@ public class PendulumPhysics : MonoBehaviour
     {
         fluidTorque += torque;
     }
+    public void SetCurrentPaintMass(float mass)
+    {
+        currentPaintMass = Mathf.Max(0f, mass);
+    }
 }

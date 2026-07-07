@@ -26,6 +26,7 @@ public class FluidSPH3D : MonoBehaviour
     public float holeRadius = 0.06f;
     [Range(0f, 0.4f)]
     public float wallFriction = 0.2f;
+    public float particleSpacing = 0.025f;
 
     [Header("الأداء والاستقرار")]
     [Range(1, 6)]
@@ -56,10 +57,13 @@ public class FluidSPH3D : MonoBehaviour
     private Vector3 bucketVelocity;
     private Vector3 bucketAcceleration;
     private Vector3 lastBucketVelocity;
+    private int particlesInsideBucket;
+    private float massPerParticle;
     private float particleReleaseAccumulator = 0f;
     // Spatial grid for fast neighbor search
-    private Dictionary<Vector3Int, List<int>> spatialGrid = new Dictionary<Vector3Int, List<int>>();
+    private Dictionary<Vector3Int, List<int>> spatialGrid = new Dictionary<Vector3Int, List<int>>(256);
     private float gridSize;
+    private List<Matrix4x4> matrices = new List<Matrix4x4>(1023);
 
     void Start()
     {
@@ -70,6 +74,14 @@ public class FluidSPH3D : MonoBehaviour
         PrecomputeKernels();
         gridSize = smoothingRadius;
         SpawnParticlesGrid();
+        particlesInsideBucket = particles.Count;
+
+        if (pendulum != null)
+        {
+            massPerParticle =
+                pendulum.initialPaintMass /
+                Mathf.Max(1, particlesInsideBucket);
+        }
         SetupVisuals();
 
         lastBucketPos = bucket != null ? bucket.position : Vector3.zero;
@@ -89,16 +101,26 @@ public class FluidSPH3D : MonoBehaviour
 
     void BuildSpatialGrid()
     {
-        spatialGrid.Clear();
+        // Instead of clearing the whole dictionary (which forces
+        // new List allocations every frame), just clear each list.
+        foreach (List<int> list in spatialGrid.Values)
+        {
+            list.Clear();
+        }
 
+        
         for (int i = 0; i < particles.Count; i++)
         {
             Vector3Int cell = GetGridCell(particles[i].position);
 
-            if (!spatialGrid.ContainsKey(cell))
-                spatialGrid[cell] = new List<int>();
+            if (!spatialGrid.TryGetValue(cell, out List<int> list))
+            {
+                // This cell has never existed before
+                list = new List<int>(16);   // Preallocate some space
+                spatialGrid.Add(cell, list);
+            }
 
-            spatialGrid[cell].Add(i);
+            list.Add(i);
         }
     }
 
@@ -142,7 +164,7 @@ public class FluidSPH3D : MonoBehaviour
     void SpawnParticlesGrid()
     {
         particles.Clear();
-        float spacing = smoothingRadius * 0.85f;
+        float spacing = particleSpacing;
         int spawned = 0;
 
         for (int ix = -10; ix <= 10 && spawned < totalParticleCount; ix++)
@@ -219,6 +241,13 @@ public class FluidSPH3D : MonoBehaviour
         UpdateFreeParticles(fullDt);
         CheckHoleRelease();
         FixNaN();
+        if (pendulum != null)
+        {
+            float remainingMass =
+                particlesInsideBucket * massPerParticle;
+
+            pendulum.SetCurrentPaintMass(remainingMass);
+        }
     }
 
     void ComputeDensityPressure()
@@ -239,14 +268,14 @@ public class FluidSPH3D : MonoBehaviour
                 if (particles[j].isFree)
                     continue;
 
-                float d = Vector3.Distance(
-                    particles[i].position,
-                    particles[j].position
-                );
+                Vector3 diffVec = particles[i].position -
+                                particles[j].position;
 
-                if (d < h)
+                float dist2 = diffVec.sqrMagnitude;
+
+                if (dist2 < h2)
                 {
-                    float diff = h2 - d * d;
+                    float diff = h2 - dist2;
 
                     rho += particleMass *
                            poly6C *
@@ -392,13 +421,12 @@ public class FluidSPH3D : MonoBehaviour
                 if (particles[i].isFree)
                     continue;
 
-                float d = Vector3.Distance(
-                    particles[i].position,
-                    holePoint.position);
+                Vector3 delta = particles[i].position - holePoint.position;
 
-                if (d < bestDistance)
+                float d2 = delta.sqrMagnitude;
+                if (d2 < bestDistance)
                 {
-                    bestDistance = d;
+                    bestDistance = d2;
                     bestIndex = i;
                 }
             }
@@ -409,6 +437,7 @@ public class FluidSPH3D : MonoBehaviour
             FluidParticle p = particles[bestIndex];
 
             p.isFree = true;
+            particlesInsideBucket--;
             p.age = 0f;
 
             p.position = holePoint.position;
@@ -481,15 +510,15 @@ public class FluidSPH3D : MonoBehaviour
     {
         if (!showParticles || particleMesh == null) return;
 
-        var mats = new List<Matrix4x4>(Mathf.Min(particles.Count, 1023));
+        matrices.Clear();
         foreach (var p in particles)
         {
-            if (mats.Count >= 1023) break;
+            if (matrices.Count >= 1023) break;
             if (float.IsNaN(p.position.x) || float.IsInfinity(p.position.x)) continue;
-            mats.Add(Matrix4x4.TRS(p.position, Quaternion.identity, Vector3.one * particleVisualRadius * 2f));
+            matrices.Add(Matrix4x4.TRS(p.position, Quaternion.identity, Vector3.one * particleVisualRadius * 2f));
         }
-        if (mats.Count > 0)
-            Graphics.DrawMeshInstanced(particleMesh, 0, particleMat, mats);
+        if (matrices.Count > 0)
+            Graphics.DrawMeshInstanced(particleMesh, 0, particleMat, matrices);
     }
     Vector3 ComputeBucketFluidForce()
     {
