@@ -40,6 +40,7 @@ public class FluidSPH3D : MonoBehaviour
     public class FluidParticle
     {
         public Vector3 position;
+        public Vector3 previousPosition;
         public Vector3 velocity;
         public float density;
         public float pressure;
@@ -55,7 +56,10 @@ public class FluidSPH3D : MonoBehaviour
     private Vector3 bucketVelocity;
     private Vector3 bucketAcceleration;
     private Vector3 lastBucketVelocity;
-    private int impactCount = 0;
+    private float particleReleaseAccumulator = 0f;
+    // Spatial grid for fast neighbor search
+    private Dictionary<Vector3Int, List<int>> spatialGrid = new Dictionary<Vector3Int, List<int>>();
+    private float gridSize;
 
     void Start()
     {
@@ -64,6 +68,7 @@ public class FluidSPH3D : MonoBehaviour
             paintCanvas = GameObject.FindAnyObjectByType<PaintCanvas>();
 
         PrecomputeKernels();
+        gridSize = smoothingRadius;
         SpawnParticlesGrid();
         SetupVisuals();
 
@@ -80,6 +85,58 @@ public class FluidSPH3D : MonoBehaviour
         poly6C = 315f / (64f * Mathf.PI * h9);
         spikyC = -45f / (Mathf.PI * h6);
         viscC = 45f / (Mathf.PI * h6);
+    }
+
+    void BuildSpatialGrid()
+    {
+        spatialGrid.Clear();
+
+        for (int i = 0; i < particles.Count; i++)
+        {
+            Vector3Int cell = GetGridCell(particles[i].position);
+
+            if (!spatialGrid.ContainsKey(cell))
+                spatialGrid[cell] = new List<int>();
+
+            spatialGrid[cell].Add(i);
+        }
+    }
+
+
+    Vector3Int GetGridCell(Vector3 position)
+    {
+        return new Vector3Int(
+            Mathf.FloorToInt(position.x / gridSize),
+            Mathf.FloorToInt(position.y / gridSize),
+            Mathf.FloorToInt(position.z / gridSize)
+        );
+    }
+
+
+    IEnumerable<int> GetNearbyParticles(Vector3 position)
+    {
+        Vector3Int center = GetGridCell(position);
+
+        for (int x = -1; x <= 1; x++)
+        {
+            for (int y = -1; y <= 1; y++)
+            {
+                for (int z = -1; z <= 1; z++)
+                {
+                    Vector3Int cell = new Vector3Int(
+                        center.x + x,
+                        center.y + y,
+                        center.z + z
+                    );
+
+                    if (spatialGrid.TryGetValue(cell, out List<int> list))
+                    {
+                        foreach (int index in list)
+                            yield return index;
+                    }
+                }
+            }
+        }
     }
 
     void SpawnParticlesGrid()
@@ -99,6 +156,7 @@ public class FluidSPH3D : MonoBehaviour
                     particles.Add(new FluidParticle
                     {
                         position = bucket.TransformPoint(lp),
+                        previousPosition = bucket.TransformPoint(lp),
                         velocity = Vector3.zero,
                         density = restDensity,
                         pressure = 0f,
@@ -119,6 +177,15 @@ public class FluidSPH3D : MonoBehaviour
         particleMat = new Material(s);
         particleMat.color = liquidColor;
         particleMat.enableInstancing = true;
+    }
+    public void SetLiquidColor(Color color)
+    {
+        liquidColor = color;
+
+        if (particleMat != null)
+        {
+            particleMat.color = color;
+        }
     }
 
     void FixedUpdate()
@@ -156,23 +223,43 @@ public class FluidSPH3D : MonoBehaviour
 
     void ComputeDensityPressure()
     {
+        BuildSpatialGrid();
+
         int n = particles.Count;
+
         for (int i = 0; i < n; i++)
         {
-            if (particles[i].isFree) continue;
+            if (particles[i].isFree)
+                continue;
+
             float rho = 0f;
-            for (int j = 0; j < n; j++)
+
+            foreach (int j in GetNearbyParticles(particles[i].position))
             {
-                if (particles[j].isFree) continue;
-                float d = Vector3.Distance(particles[i].position, particles[j].position);
+                if (particles[j].isFree)
+                    continue;
+
+                float d = Vector3.Distance(
+                    particles[i].position,
+                    particles[j].position
+                );
+
                 if (d < h)
                 {
                     float diff = h2 - d * d;
-                    rho += particleMass * poly6C * diff * diff * diff;
+
+                    rho += particleMass *
+                           poly6C *
+                           diff * diff *
+                           diff;
                 }
             }
+
             particles[i].density = Mathf.Max(rho, 0.5f);
-            particles[i].pressure = pressureStiffness * (particles[i].density - restDensity);
+
+            particles[i].pressure =
+                pressureStiffness *
+                (particles[i].density - restDensity);
         }
     }
 
@@ -188,17 +275,31 @@ public class FluidSPH3D : MonoBehaviour
 
             Vector3 fP = Vector3.zero, fV = Vector3.zero;
 
-            for (int j = 0; j < n; j++)
+            foreach (int j in GetNearbyParticles(p.position))
             {
-                if (i == j || particles[j].isFree) continue;
+                if (i == j || particles[j].isFree)
+                    continue;
+
                 Vector3 rv = p.position - particles[j].position;
                 float d = rv.magnitude;
-                if (d >= h || d < 0.0001f) continue;
 
-                float avgP = (p.pressure + particles[j].pressure) / (2f * Mathf.Max(particles[j].density, 0.5f));
-                fP += -(particleMass * avgP) * (spikyC * (h - d) * (h - d) / d) * rv;
+                if (d >= h || d < 0.0001f)
+                    continue;
 
-                fV += viscosity * particleMass * ((particles[j].velocity - p.velocity) / Mathf.Max(particles[j].density, 0.5f)) * (viscC * (h - d));
+
+                float avgP =
+                    (p.pressure + particles[j].pressure) /
+                    (2f * Mathf.Max(particles[j].density, 0.5f));
+
+
+                fP += -(particleMass * avgP) *
+                    (spikyC * (h - d) * (h - d) / d) * rv;
+
+
+                fV += viscosity * particleMass *
+                    ((particles[j].velocity - p.velocity) /
+                    Mathf.Max(particles[j].density, 0.5f)) *
+                    (viscC * (h - d));
             }
             Vector3 inertia = -bucketAcceleration * particleMass * (pressureStiffness / 200f);
             Vector3 total = fP + fV + grav * particleMass + inertia;
@@ -220,19 +321,6 @@ public class FluidSPH3D : MonoBehaviour
     {
         if (paintCanvas == null) return;
 
-        // إطلاق الشعاع من الدلو لمطابقة الخيط البصري تماماً
-        Vector3 rayOrigin = bucket.position;
-
-        if (Physics.Raycast(rayOrigin, Vector3.down, out RaycastHit hit, 30f))
-        {
-            if (hit.collider.gameObject == paintCanvas.gameObject || hit.collider.GetComponent<PaintCanvas>() != null)
-            {
-                // ريشة رسم ممتازة وموزونة لمنع التقطع
-                paintCanvas.RegisterImpact(hit.point, 12.0f);
-                impactCount++;
-            }
-        }
-
         float canvasWorldY = paintCanvas.transform.position.y;
         for (int i = particles.Count - 1; i >= 0; i--)
         {
@@ -241,8 +329,20 @@ public class FluidSPH3D : MonoBehaviour
             {
                 p.age += dt;
                 p.velocity.y -= 9.81f * dt;
+                p.previousPosition = p.position;
                 p.position += p.velocity * dt;
-                if (p.position.y <= canvasWorldY - 1f || p.age > 3f)
+                if (p.position.y <= canvasWorldY)
+                {
+                    paintCanvas.RegisterImpact(
+                        p.position,
+                        p.velocity.magnitude
+                    );
+
+                    ResetToBucket(p);
+                    particles[i] = p;
+                    continue;
+                }
+                if (p.age > 3f)
                 {
                     ResetToBucket(p);
                 }
@@ -253,46 +353,79 @@ public class FluidSPH3D : MonoBehaviour
 
     void CheckHoleRelease()
     {
-        //  تم تصحيح الاستدعاء هنا ليطابق المتغير pendulum تماماً وحل مشكلة الـ Context
-        bool hasPaint = (pendulum == null) || (pendulum.CurrentPaintMass > 0.01f);
-        if (!hasPaint) return;
+        if (pendulum == null || holePoint == null)
+            return;
 
-        float bucketSpeed = bucketVelocity.magnitude;
-        float releaseChance = Mathf.Clamp01(0.02f + bucketSpeed * 0.03f);
+        if (pendulum.CurrentPaintMass <= 0.01f)
+            return;
 
-        for (int i = 0; i < particles.Count; i++)
+        //--------------------------------------------------
+        // Compute release rate from physics
+        //--------------------------------------------------
+
+        float flowRate =
+            Mathf.Clamp01(
+                pendulum.CurrentPaintMass /
+                pendulum.initialPaintMass);
+
+        flowRate *= Mathf.Lerp(
+            2f,
+            20f,
+            holeRadius / 0.06f);
+
+        particleReleaseAccumulator +=
+            flowRate * Time.fixedDeltaTime;
+
+        //--------------------------------------------------
+        // Release particles
+        //--------------------------------------------------
+
+        while (particleReleaseAccumulator >= 1f)
         {
-            var p = particles[i];
-            if (p.isFree) continue;
+            particleReleaseAccumulator -= 1f;
 
-            Vector3 local = bucket.InverseTransformPoint(p.position);
-            float distH = new Vector2(local.x, local.z).magnitude;
+            int bestIndex = -1;
+            float bestDistance = float.MaxValue;
 
-            bool nearHole = local.y <= -bucketHeight * 0.40f && distH <= holeRadius;
-            if (!nearHole) continue;
-
-            if (Random.value < releaseChance)
+            for (int i = 0; i < particles.Count; i++)
             {
-                p.isFree = true;
-                p.age = 0f;
-                if (holePoint != null)
+                if (particles[i].isFree)
+                    continue;
+
+                float d = Vector3.Distance(
+                    particles[i].position,
+                    holePoint.position);
+
+                if (d < bestDistance)
                 {
-                    p.position = holePoint.position;
+                    bestDistance = d;
+                    bestIndex = i;
                 }
-                float fluidH = Mathf.Max(bucketHeight * 0.5f, 0.05f);
-                float exitV = Mathf.Sqrt(2f * 9.81f * fluidH) * 0.4f;
-                Vector3 exitDirection = Vector3.down;
-
-                if (holePoint != null)
-                {
-                    exitDirection = holePoint.forward;
-                }
-
-                p.velocity = exitDirection * exitV
-                             + bucketVelocity * 0.8f;
-
-                particles[i] = p;
             }
+
+            if (bestIndex == -1)
+                return;
+
+            FluidParticle p = particles[bestIndex];
+
+            p.isFree = true;
+            p.age = 0f;
+
+            p.position = holePoint.position;
+
+            float fluidHeight =
+                Mathf.Max(bucketHeight * 0.5f, 0.05f);
+
+            float exitVelocity =
+                Mathf.Sqrt(2f * 9.81f * fluidHeight);
+
+            Vector3 exitDirection = holePoint.forward;
+
+            p.velocity =
+                exitDirection * exitVelocity +
+                bucketVelocity;
+
+            particles[bestIndex] = p;
         }
     }
 
@@ -325,6 +458,7 @@ public class FluidSPH3D : MonoBehaviour
         float t = Random.value * Mathf.PI * 2f;
         float y = Random.Range(-bucketHeight * 0.25f, bucketHeight * 0.2f);
         p.position = bucket.TransformPoint(new Vector3(r * Mathf.Cos(t), y, r * Mathf.Sin(t)));
+        p.previousPosition = p.position;
         p.velocity = Vector3.zero;
         p.isFree = false;
         p.age = 0f;

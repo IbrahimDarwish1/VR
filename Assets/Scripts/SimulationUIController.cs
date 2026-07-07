@@ -161,8 +161,14 @@ public class SimulationUIController : MonoBehaviour
 
     public void SetPaintColor(Color color)
     {
-        if (paintCanvas != null) paintCanvas.paintColor = color;
-        if (paintStream != null) paintStream.SetColor(color);
+        if (paintCanvas != null)
+            paintCanvas.paintColor = color;
+
+        if (paintStream != null)
+            paintStream.SetColor(color);
+
+        if (fluidSPH3D != null)
+            fluidSPH3D.SetLiquidColor(color);
     }
 
     private void UpdateAllLabels()
